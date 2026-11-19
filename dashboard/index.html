@@ -1,4 +1,4 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -7,7 +7,85 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<main id="board" tabindex="-1" aria-busy="true"></main>
+<header>
+  <div class="wrap">
+    <h1>Token Launch Radar</h1>
+    <p class="sub">Pre-token protocols, ranked by what their token would be worth if the
+    record stayed as it is. <span id="meta"></span></p>
+  </div>
+</header>
+<main class="wrap">
+  <section class="model card">
+    <h2>How the value is scored</h2>
+    <p><code>implied = TVL &times; category multiple &times; momentum &times; maturity &times; breadth</code></p>
+    <p>The category multiple is the median market-cap/TVL of this snapshot's own
+    tokened protocols in the same category. Momentum is the 7-day TVL change at full
+    weight, clamped to &minus;50%..+150%. Maturity is log-scaled age since listing with
+    no token. Breadth adds 2% per extra chain. Nothing is scored from a list of names:
+    every figure comes from the sealed snapshot. Protocols whose token already trades
+    sit apart in the <strong>Live</strong> view, at the market's own values, never mixed
+    into the ranking.</p>
+  </section>
+
+  <nav class="views" aria-label="Views">
+    <button id="view-board" class="view-btn active" type="button">Ranked board</button>
+    <button id="view-live" class="view-btn" type="button">Live &mdash; token already trades</button>
+  </nav>
+
+  <section id="board-view">
+    <div class="controls card">
+      <label>Search <input id="q" type="search" placeholder="protocol name or slug"></label>
+      <label>Category <select id="cat"><option value="">All categories</option></select></label>
+      <label>Chain <select id="chain"><option value="">All chains</option></select></label>
+      <label>Sort <select id="sort">
+        <option value="rank">Rank (implied value)</option>
+        <option value="tvl">TVL</option>
+        <option value="change">7-day change</option>
+        <option value="age">Age (no token)</option>
+      </select></label>
+      <span id="count" class="count"></span>
+    </div>
+    <table id="board">
+      <thead><tr>
+        <th>#</th><th>Protocol</th><th>Category</th><th>Chains</th>
+        <th class="num">TVL</th><th class="num">7d</th><th class="num">Implied value</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p class="hint">Click any row for the protocol's detail: its figures, the model
+    breakdown, and a concrete farm plan with costs and timing.</p>
+  </section>
+
+  <section id="live-view" hidden>
+    <p class="card">These protocols record a token that already trades, so they are
+    <strong>not</strong> ranked. Values below are the market caps the snapshot itself
+    records &mdash; the board above is for what has not launched yet.</p>
+    <table id="live">
+      <thead><tr>
+        <th>Protocol</th><th>Symbol</th><th>Category</th>
+        <th class="num">TVL</th><th class="num">Market cap</th><th class="num">Mcap / TVL</th>
+      </tr></thead>
+      <tbody id="live-rows"></tbody>
+    </table>
+  </section>
+
+  <section id="detail" class="card" hidden>
+    <button id="detail-close" type="button">&larr; Back to board</button>
+    <h2 id="d-name"></h2>
+    <p id="d-sub" class="sub"></p>
+    <div id="d-stats" class="stats"></div>
+    <h3>Why this value &mdash; model breakdown</h3>
+    <div id="d-model"></div>
+    <h3>Farm plan</h3>
+    <ol id="d-steps" class="steps"></ol>
+  </section>
+</main>
+<footer class="wrap">
+  <p>Data: sealed DefiLlama snapshot, fetched once by the house. &ldquo;Records no
+  token&rdquo; means the snapshot's record carries no token &mdash; it is not proof a
+  token does not exist. Implied values are this entry's own claim, never a
+  prediction of whether or when a token is issued.</p>
+</footer>
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>

@@ -13,25 +13,32 @@ mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input <kit>/input/snapshot
 with the model in `lib/model.ts`, and writes `board.json`, `data.js`, `dashboard/`,
 `screenshots/` and `dossier.json` into the output directory.
 
-## The model (signal-2)
+## The model (signal-3, v2)
 
 Implied value is derived only from the snapshot's own figures — never from a list of names:
 
 ```
-implied = TVL x base(category) x growth x maturity x breadth
+implied = TVL x categoryMultiple x momentum x maturity x breadth
 ```
 
-- `base(category)` — an FDV/TVL multiple per category family (curators and allocators lowest,
-  lending/CDP/DEX higher), because the same TVL supports very different fee bases;
-- `growth` — the 7-day TVL change, clamped to [-50%, +150%], weighted 0.6, floored at 0.5;
-- `maturity` — how long the protocol has run with no token (log-scaled age since `listed_at`);
-- `breadth` — a small bonus per extra chain the protocol's TVL spans, capped at five.
+- `categoryMultiple` — the median market-cap/TVL of the snapshot's own tokened
+  protocols in the same category (blended with the global median when a category
+  has few tokened peers), clamped to 0.05..1.25, because the same TVL supports
+  very different fee bases per category;
+- `momentum` — the 7-day TVL change, clamped to [-50%, +150%], at full weight
+  (v1 used 0.6), floored at 0.4x, so fast-growing TVL earns up to 2.5x;
+- `maturity` — how long the protocol has run with no token (log-scaled age since
+  `listed_at`, 0.75 for a newborn up to 1.00 after ~3 years);
+- `breadth` — a small bonus per extra chain the protocol's TVL spans, capped at
+  five extra chains.
 
-The board covers the whole snapshot watchlist and adds the 200 strongest early protocols below
-the watchlist floor, ranked by the same formula. Protocols whose token already trades are kept
-apart in the dashboard's Live view at the market's own values, never mixed into the ranking.
-Each row's farm plan is generated from the protocol's category, chains, TVL and age, with a
-capital tier, gas estimates, a weekly cadence and a hold window.
+The board covers the whole snapshot watchlist and adds the strongest early
+protocols below the watchlist floor that record no token and are not wrapped,
+staked or bridged products, ranked by the same formula. Protocols whose token
+already trades are kept apart in the dashboard's Live view at the market's own
+values, never mixed into the ranking. Each row's farm plan is generated from
+the protocol's category, chains, TVL and age, with a capital tier, gas estimates,
+a weekly cadence and a hold window.
 
 ## Credit
 

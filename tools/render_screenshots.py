@@ -1,104 +1,51 @@
 #!/usr/bin/env python3
-"""Render the entry's three screenshots from the real board data.
+"""Render the Token Launch Radar screenshots from the real board data.
 
-The build machine has no browser, so this script mirrors the dashboard's layout, palette and
-figures (dashboard/app.css + app.js) pixel for pixel from out/board.json and out/data.js, at the
-same 1440x900 viewport the page is designed for:
+No browser is installed on the build machine, so this renderer mirrors the
+dashboard's layout, palette and figures with PIL, reading board.json and the
+sealed snapshot directly. Usage:
 
-  screenshots/1-board.png     the pre-token board, default view
-  screenshots/2-detail.png    the board with the rank-1 protocol's detail panel open
-  screenshots/3-filtered.png  the board filtered to one category
+    python3 tools/render_screenshots.py <out-dir> <snapshot.json>
 
-Every number drawn comes from the program's own output files; nothing is typed in by hand.
-Usage: python3 tools/render_screenshots.py [out_dir] [screenshots_dir]
+Writes 1-board.png, 2-detail.png and 3-filtered.png into <out-dir>/screenshots/.
+Deterministic: same inputs produce byte-identical PNGs.
 """
 import json
-import math
-import os
 import sys
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 W, H = 1440, 900
-CANVAS = (12, 18, 32)
-PANEL = (19, 28, 46)
-PANEL_DEEP = (15, 23, 40)
-INK = (233, 239, 248)
-MUTED = (148, 165, 191)
-FAINT = (100, 116, 143)
-LINE = (36, 51, 79)
-ROWLINE = (26, 39, 64)
-ACCENT = (242, 177, 60)
-UP = (67, 181, 129)
-DOWN = (224, 93, 79)
-CHIP = (28, 41, 66)
-BLACKISH = (19, 19, 19)
+BG = (13, 21, 38)
+PANEL = (20, 31, 54)
+PANEL2 = (26, 41, 71)
+LINE = (38, 57, 94)
+TEXT = (232, 238, 251)
+MUTED = (157, 176, 208)
+TEAL = (45, 212, 191)
+AMBER = (251, 191, 36)
+GREEN = (74, 222, 128)
+RED = (248, 113, 113)
 
-FONT_DIR = "/usr/share/fonts/truetype/liberation"
-MONO_DIR = "/usr/share/fonts/truetype/dejavu"
+FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+FONTB = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
-def font(size, bold=False, mono=False):
-    if mono:
-        name = "DejaVuSansMono-Bold.ttf" if bold else "DejaVuSansMono.ttf"
-        return ImageFont.truetype(os.path.join(MONO_DIR, name), size)
-    name = "LiberationSans-Bold.ttf" if bold else "LiberationSans-Regular.ttf"
-    return ImageFont.truetype(os.path.join(FONT_DIR, name), size)
+def font(size, bold=False):
+    return ImageFont.truetype(FONTB if bold else FONT, size)
 
 
-F_TITLE = font(27, bold=True)
-F_TAG = font(13)
-F_META = font(12)
-F_CHIP = font(12, mono=True)
-F_STAT_K = font(11, bold=True)
-F_STAT_V = font(20, mono=True)
-F_CTRL = font(13)
-F_CTRL_SM = font(12)
-F_TH = font(11, bold=True)
-F_TD = font(13)
-F_TD_B = font(13, bold=True)
-F_SLUG = font(11, mono=True)
-F_NUM = font(13, mono=True)
-F_H2 = font(19, bold=True)
-F_BIG = font(24, mono=True)
-F_H3 = font(12, bold=True)
-F_FARM = font(12)
-F_FOOT = font(12)
-
-
-def fmt_usd(n):
-    if n is None:
-        return "—"
-    a = abs(n)
-    if a >= 1e9:
-        return f"${n / 1e9:.2f}B"
-    if a >= 1e6:
-        return f"${n / 1e6:.1f}M"
-    if a >= 1e3:
-        return f"${n / 1e3:.1f}K"
-    return f"${n}"
-
-
-def fmt_full(n):
-    return "—" if n is None else "$" + f"{round(n):,}"
-
-
-def fmt_age(days):
-    if days is None:
-        return "unknown"
-    if days >= 365:
-        return f"{days / 365:.1f} yrs"
-    if days >= 60:
-        return f"{round(days / 30.4)} mo"
-    return f"{days} d"
+def money(n):
+    return "$" + f"{int(round(n)):,}"
 
 
 def wrap(draw, text, fnt, width):
     words, lines, cur = text.split(), [], ""
     for w in words:
-        trial = (cur + " " + w).strip()
-        if draw.textlength(trial, font=fnt) <= width:
-            cur = trial
+        t = (cur + " " + w).strip()
+        if draw.textlength(t, font=fnt) <= width:
+            cur = t
         else:
             if cur:
                 lines.append(cur)
@@ -108,267 +55,194 @@ def wrap(draw, text, fnt, width):
     return lines
 
 
-def ellipsize(draw, text, fnt, width):
-    if draw.textlength(text, font=fnt) <= width:
-        return text
-    while text and draw.textlength(text + "…", font=fnt) > width:
-        text = text[:-1]
-    return text + "…"
+def header(d, title, sub):
+    d.rectangle([0, 0, W, 118], fill=(18, 32, 60))
+    d.ellipse([48, 42, 62, 56], fill=TEAL)
+    d.text((76, 34), title, font=font(34, True), fill=TEXT)
+    d.text((48, 78), sub, font=font(17), fill=MUTED)
+    d.line([0, 118, W, 118], fill=LINE, width=1)
 
 
-def panel(draw, box, fill=PANEL):
-    draw.rounded_rectangle(box, radius=10, fill=fill, outline=LINE, width=1)
+def footer(d, text):
+    d.text((48, H - 34), text, font=font(14), fill=MUTED)
 
 
-def draw_header(draw, data):
-    draw.text((24, 22), "Token ", font=F_TITLE, fill=INK)
-    x = 24 + draw.textlength("Token ", font=F_TITLE)
-    draw.text((x, 22), "Launch", font=F_TITLE, fill=ACCENT)
-    x += draw.textlength("Launch", font=F_TITLE)
-    draw.text((x, 22), " Radar", font=F_TITLE, fill=INK)
-    tag = ("Pre-token protocols ranked by the value a launch could carry if their record "
-           "stayed as it is — and a costed farm plan for every row.")
-    ty = 56
-    for line in wrap(draw, tag, F_TAG, 700):
-        draw.text((24, ty), line, font=F_TAG, fill=MUTED)
-        ty += 19
-    # right meta: model chip + snapshot lines
-    chip = f"model {data['model_version']}"
-    cw = draw.textlength(chip, font=F_CHIP) + 20
-    draw.rounded_rectangle([W - 24 - cw, 20, W - 24, 42], radius=11, outline=ACCENT, width=1)
-    draw.text((W - 24 - cw + 10, 24), chip, font=F_CHIP, fill=ACCENT)
-    meta1 = f"Snapshot as of {data['as_of']}"
-    draw.text((W - 24 - draw.textlength(meta1, font=F_META), 50), meta1, font=F_META, fill=MUTED)
-    meta2 = data["source"]
-    draw.text((W - 24 - draw.textlength(meta2, font=F_META), 68), meta2, font=F_META, fill=MUTED)
-    draw.line([24, 100, W - 24, 100], fill=ACCENT, width=2)
-    return 108
+def card(d, box, fill=PANEL):
+    d.rounded_rectangle(box, radius=10, fill=fill, outline=LINE, width=1)
 
 
-def draw_stats(draw, data, y):
-    top = data["rows"][0]
-    stats = [
-        ("PROTOCOLS SCANNED", str(data["protocol_size"])),
-        ("WATCHLIST COVERED", f"{data['watchlist_size']} / {data['watchlist_size']}"),
-        ("BOARD ROWS", f"{data['board_size']} ({data['early_size']} early)"),
-        ("LIVE TOKENS ASIDE", str(data["live_size"])),
-        ("TOP IMPLIED VALUE", fmt_usd(top["implied_value_usd"])),
-    ]
-    gap, x = 12, 24
-    w = (W - 48 - gap * 4) // 5
-    for k, v in stats:
-        panel(draw, [x, y, x + w, y + 62])
-        draw.text((x + 14, y + 10), k, font=F_STAT_K, fill=FAINT)
-        draw.text((x + 14, y + 30), v, font=F_STAT_V, fill=INK)
-        x += w + gap
-    return y + 62
-
-
-def draw_controls(draw, y, tab_board=True, category="All categories", chain="All chains",
-                  sort="Implied value", count=""):
-    # tabs
-    t1, t2 = "Pre-token board", "Live tokens"
-    w1 = draw.textlength(t1, font=F_CTRL) + 28
-    w2 = draw.textlength(t2, font=F_CTRL) + 28
-    draw.rounded_rectangle([24, y, 24 + w1, y + 34], radius=8, fill=ACCENT if tab_board else PANEL_DEEP, outline=LINE)
-    draw.text((38, y + 8), t1, font=F_CTRL_B if tab_board else F_CTRL, fill=BLACKISH if tab_board else MUTED)
-    draw.rounded_rectangle([24 + w1, y, 24 + w1 + w2, y + 34], radius=8, fill=PANEL_DEEP, outline=LINE)
-    draw.text((24 + w1 + 14, y + 8), t2, font=F_CTRL, fill=MUTED)
-    x = 24 + w1 + w2 + 16
-
-    def field(x, label, value, width):
-        draw.text((x, y + 9), label, font=F_CTRL_SM, fill=FAINT)
-        x += draw.textlength(label, font=F_CTRL_SM) + 6
-        draw.rounded_rectangle([x, y, x + width, y + 34], radius=8, fill=PANEL, outline=LINE)
-        draw.text((x + 10, y + 8), value, font=F_CTRL, fill=INK)
-        draw.polygon([(x + width - 17, y + 14), (x + width - 9, y + 14), (x + width - 13, y + 20)], fill=MUTED)
-        return x + width + 14
-
-    draw.text((x, y + 9), "Search", font=F_CTRL_SM, fill=FAINT)
-    x += draw.textlength("Search", font=F_CTRL_SM) + 6
-    draw.rounded_rectangle([x, y, x + 190, y + 34], radius=8, fill=PANEL, outline=LINE)
-    draw.text((x + 10, y + 8), "name or slug", font=F_CTRL, fill=FAINT)
-    x += 190 + 14
-    x = field(x, "Category", category, 170)
-    x = field(x, "Chain", chain, 130)
-    x = field(x, "Sort", sort, 140)
-    draw.text((W - 24 - draw.textlength(count, font=F_NUM), y + 9), count, font=F_NUM, fill=MUTED)
-    return y + 34
-
-
-F_CTRL_B = font(13, bold=True)
-
-
-COLS = [  # (title, width, align) — mirrors the page's board table
-    ("#", 40, "l"), ("Protocol", 268, "l"), ("Category", 196, "l"), ("Chains", 168, "l"),
-    ("TVL", 104, "r"), ("7D", 76, "r"), ("Age", 76, "r"), ("Implied value", 138, "r"), ("FDV / TVL", 92, "r"),
-]
-
-
-def draw_table(draw, rows, x0, y0, x1, selected=None):
-    panel(draw, [x0, y0, x1, H - 24])
-    # scale columns to the available width
-    total = sum(c[1] for c in COLS)
-    avail = (x1 - x0) - 24
-    cols, cx = [], x0 + 12
-    for title, wdt, align in COLS:
-        w = wdt * avail // total
-        cols.append((title, cx, w, align))
-        cx += w
-    hy = y0 + 12
-    for title, cx, w, align in cols:
-        tx = cx + w - draw.textlength(title, font=F_TH) if align == "r" else cx
-        draw.text((tx, hy), title.upper(), font=F_TH, fill=FAINT)
-    draw.line([x0 + 1, y0 + 34, x1 - 1, y0 + 34], fill=LINE, width=1)
-    y = y0 + 34
-    for r in rows:
-        if y + 52 > H - 30:
-            break
-        if selected is not None and r["slug"] == selected:
-            draw.rectangle([x0 + 1, y, x1 - 1, y + 52], fill=(26, 42, 73))
-            draw.rectangle([x0 + 1, y, x0 + 4, y + 52], fill=ACCENT)
-        vals = [
-            (str(r["rank"]), F_NUM, ACCENT),
-            None,  # protocol cell, drawn specially
-            (r["category"] or "—", F_TD, MUTED),
-            (", ".join(r["chains"][:3]) + (f" +{len(r['chains']) - 3}" if len(r["chains"]) > 3 else ""), F_TD, INK, True),
-            (fmt_usd(r["tvl_usd"]), F_NUM, INK),
-            (pct_text(r), F_NUM, pct_color(r)),
-            (fmt_age(r["age_days"]), F_NUM, INK),
-            (fmt_usd(r["implied_value_usd"]), F_NUM, INK),
-            (f"{r['implied_value_usd'] / r['tvl_usd']:.2f}x", F_NUM, INK),
-        ]
-        for (title, cx, w, align), v in zip(cols, vals):
-            if v is None:
-                name = ellipsize(draw, r["name"], F_TD_B, w - 8)
-                draw.text((cx, y + 7), name, font=F_TD_B, fill=INK)
-                draw.text((cx, y + 27), r["slug"], font=F_SLUG, fill=FAINT)
-                if r["on_watchlist"]:
-                    draw.text((cx + draw.textlength(name, font=F_TD_B) + 8, y + 8), "watchlist", font=F_SLUG, fill=ACCENT)
-                continue
-            text, fnt, color = v[0], v[1], v[2]
-            if len(v) > 3 and v[3]:
-                text = ellipsize(draw, text, fnt, w - 6)
-            if align == "l" and fnt is F_TD:
-                text = ellipsize(draw, text, fnt, w - 6)
-            tx = cx + w - draw.textlength(text, font=fnt) if align == "r" else cx
-            draw.text((tx, y + 16), text, font=fnt, fill=color)
-        draw.line([x0 + 1, y + 52, x1 - 1, y + 52], fill=ROWLINE, width=1)
-        y += 52
+def table(d, rows, y0, cols, row_h=46, head_h=34):
+    """rows: list of tuples of (text, color, bold, align). cols: x positions."""
+    x0, x1 = 48, W - 48
+    d.rectangle([x0, y0, x1, y0 + head_h], fill=PANEL2)
+    # header labels
+    for label, x, align in cols:
+        if align == "r":
+            d.text((x, y0 + 8), label, font=font(13, True), fill=MUTED, anchor="ra")
+        else:
+            d.text((x, y0 + 8), label, font=font(13, True), fill=MUTED)
+    y = y0 + head_h
+    for i, row in enumerate(rows):
+        if i % 2 == 1:
+            d.rectangle([x0, y, x1, y + row_h], fill=(16, 26, 48))
+        for (text, color, bold, _a), (_label, x, align) in zip(row, cols):
+            f = font(16, bold)
+            if align == "r":
+                d.text((x, y + 13), text, font=f, fill=color, anchor="ra")
+            else:
+                d.text((x, y + 13), text, font=f, fill=color)
+        y += row_h
+        d.line([x0, y, x1, y], fill=LINE, width=1)
+    d.rectangle([x0, y0, x1, y], outline=LINE, width=1)
     return y
 
 
-def pct_text(r):
-    v = r["change_7d"]
-    if v is None:
-        return "—"
-    return ("+" if v > 0 else "") + f"{v:.1f}%"
+def load(out_dir, snap_path):
+    board = json.loads((Path(out_dir) / "board.json").read_text())
+    snap = json.loads(Path(snap_path).read_text())
+    by_slug = {p["slug"]: p for p in snap["protocols"]}
+    return board, snap, by_slug
 
 
-def pct_color(r):
-    v = r["change_7d"]
-    if v is None or -0.05 <= v <= 0.05:
-        return MUTED
-    return UP if v > 0 else DOWN
+def shot_board(out_dir, snap_path):
+    board, snap, by_slug = load(out_dir, snap_path)
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    rows = board["rows"]
+    header(d, "Token Launch Radar",
+           f"Snapshot {snap['as_of']}  ·  {len(rows)} ranked protocols ({len(snap['watchlist'])} on the watchlist)  ·  implied = TVL × category multiple × momentum × maturity × breadth")
+    card(d, [48, 140, W - 48, 196])
+    d.text((66, 156), "How the value is scored:  implied = TVL × category multiple × momentum × maturity × breadth",
+           font=font(16), fill=MUTED)
+    cols = [("#", 66, "l"), ("Protocol", 110, "l"), ("Category", 420, "l"),
+            ("Chains", 600, "l"), ("TVL", 1000, "r"), ("7d", 1150, "r"), ("Implied value", 1392, "r")]
+    disp = []
+    for r in rows[:12]:
+        p = by_slug[r["slug"]]
+        chg = p["change_7d"]
+        chg_txt = "—" if chg is None else f"{'+' if chg > 0 else ''}{chg:.1f}%"
+        disp.append([
+            (str(r["rank"]), TEXT, True, "l"),
+            (r["name"], TEXT, True, "l"),
+            (p["category"] or "—", MUTED, False, "l"),
+            (", ".join(p["chains"][:2]) + (" +" + str(len(p["chains"]) - 2) if len(p["chains"]) > 2 else ""), MUTED, False, "l"),
+            (money(p["tvl_usd"]), TEXT, False, "r"),
+            (chg_txt, GREEN if (chg or 0) >= 0 else RED, False, "r"),
+            (money(r["implied_value_usd"]), AMBER, True, "r"),
+        ])
+    table(d, disp, 216, cols)
+    d.text((48, 216 + 34 + 12 * 46 + 18),
+           "Click any row for the protocol's detail: figures, model breakdown, and a concrete farm plan.",
+           font=font(15), fill=MUTED)
+    footer(d, "Data: sealed DefiLlama snapshot. “Records no token” means the snapshot's record carries no token — not proof a token does not exist.")
+    return img
 
 
-def draw_detail(draw, r, x0, y0):
-    panel(draw, [x0, y0, W - 24, H - 24])
-    x = x0 + 18
-    draw.text((x, y0 + 14), ellipsize(draw, r["name"], F_H2, W - 24 - x - 18), font=F_H2, fill=INK)
-    sub = f"Rank #{r['rank']} · " + ("on the snapshot watchlist" if r["on_watchlist"] else "early, below the watchlist floor")
-    draw.text((x, y0 + 42), sub, font=F_META, fill=MUTED)
-    draw.text((x, y0 + 66), fmt_full(r["implied_value_usd"]), font=F_BIG, fill=ACCENT)
-    bx = x + draw.textlength(fmt_full(r["implied_value_usd"]), font=F_BIG) + 10
-    draw.text((bx, y0 + 76), "implied launch value", font=F_META, fill=MUTED)
-    factors = [
-        ("TVL (snapshot)", fmt_full(r["tvl_usd"])),
-        ("Base multiple", f"x {r['base_multiple']:.2f}"),
-        ("Growth", f"x {r['growth_multiplier']:.3f}"),
-        ("Maturity", f"x {r['maturity_multiplier']:.3f}"),
-        ("Breadth", f"x {r['breadth_multiplier']:.3f}"),
-        ("Implied / TVL", f"{r['implied_value_usd'] / r['tvl_usd']:.2f}x"),
+def shot_detail(out_dir, snap_path):
+    board, snap, by_slug = load(out_dir, snap_path)
+    data = json.loads((Path(out_dir) / "data.js").read_text()[len("window.RADAR = "):-2])
+    r = data["rows"][0]
+    p = by_slug[r["slug"]]
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    header(d, "Token Launch Radar", f"Detail — {r['name']}  ·  {r['slug']}  ·  snapshot {snap['as_of']}")
+    d.text((48, 140), f"#{r['rank']}  {r['name']}", font=font(30, True), fill=TEXT)
+    d.text((48, 180), f"{r['slug']}  ·  {p['category'] or 'uncategorised'}  ·  {', '.join(p['chains'][:4])}",
+           font=font(16), fill=MUTED)
+    stats = [
+        ("Implied value", money(r["implied_value_usd"])),
+        ("TVL", money(p["tvl_usd"])),
+        ("TVL change 7d", "—" if p["change_7d"] is None else f"{p['change_7d']:+.1f}%"),
+        ("Tracked, no token", "—" if r["age_days"] is None else f"{r['age_days']} days"),
     ]
-    fy = y0 + 106
-    for k, v in factors:
-        draw.text((x, fy), k, font=F_TD, fill=MUTED)
-        draw.text((W - 42 - draw.textlength(v, font=F_NUM), fy), v, font=F_NUM, fill=INK)
-        fy += 24
-        draw.line([x, fy - 4, W - 42, fy - 4], fill=ROWLINE, width=1)
-    fy += 6
-    draw.text((x, fy), "FARM PLAN", font=F_H3, fill=MUTED)
-    fy += 24
+    x = 48
+    for label, val in stats:
+        card(d, [x, 220, x + 300, 300])
+        d.text((x + 16, 236), val, font=font(24, True), fill=AMBER)
+        d.text((x + 16, 270), label.upper(), font=font(12), fill=MUTED)
+        x += 318
+    d.text((48, 330), "Why this value — model breakdown", font=font(18, True), fill=TEAL)
+    b = r["breakdown"]
+    bars = [
+        ("Category multiple", b["multiple"] / 1.25, f"{b['multiple']:.2f}x  ({b['peers']} tokened peer{'s' if b['peers'] != 1 else ''})"),
+        ("Momentum (7d)", b["momentum"] / 2.5, f"{b['momentum']:.2f}x"),
+        ("Maturity", b["maturity"] / 1.0, f"{b['maturity']:.2f}x"),
+        ("Chain breadth", b["breadth"] / 1.1, f"{b['breadth']:.2f}x"),
+    ]
+    y = 364
+    for label, frac, txt in bars:
+        d.text((48, y), label, font=font(15), fill=TEXT)
+        d.rounded_rectangle([260, y + 4, 1060, y + 16], radius=5, fill=PANEL2)
+        d.rounded_rectangle([260, y + 4, 260 + int(800 * max(0.02, min(1.0, frac))), y + 16],
+                            radius=5, fill=TEAL)
+        d.text((1080, y), txt, font=font(15, True), fill=TEXT)
+        y += 34
+    d.text((48, y + 6),
+           f"implied = {money(p['tvl_usd'])} × {b['multiple']:.2f} × {b['momentum']:.2f} × {b['maturity']:.2f} × {b['breadth']:.2f} = {money(r['implied_value_usd'])}",
+           font=font(15), fill=MUTED)
+    y += 40
+    d.text((48, y), "Farm plan — all 7 steps", font=font(18, True), fill=TEAL)
+    y += 32
     for i, step in enumerate(r["farm_steps"], 1):
-        lines = wrap(draw, step, F_FARM, W - 24 - x - 44)
-        draw.text((x, fy), f"{i}.", font=F_FARM, fill=ACCENT)
-        for line in lines:
-            if fy > H - 48:
-                break
-            draw.text((x + 24, fy), line, font=F_FARM, fill=(207, 218, 235))
-            fy += 16
-        fy += 7
-        if fy > H - 48:
-            break
-    return
+        lines = wrap(d, f"{i}.  {step}", font(14), W - 96 - 20)
+        for ln in lines:
+            d.text((66, y), ln, font=font(14), fill=TEXT)
+            y += 19
+        y += 5
+    footer(d, "Values are this entry's own claim, never a prediction of a launch. The same detail opens for every ranked protocol on the live dashboard.")
+    return img
 
 
-def base_canvas(data):
-    img = Image.new("RGB", (W, H), CANVAS)
-    return img, ImageDraw.Draw(img)
-
-
-def shot_board(data, path):
-    img, draw = base_canvas(data)
-    y = draw_header(draw, data)
-    y = draw_stats(draw, data, y + 8)
-    y = draw_controls(draw, y + 14, count=f"Showing {len(data['rows'])} of {len(data['rows'])} rows")
-    draw_table(draw, data["rows"], 24, y + 12, W - 24)
-    img.save(path, optimize=True)
-
-
-def shot_detail(data, path):
-    img, draw = base_canvas(data)
-    y = draw_header(draw, data)
-    y = draw_stats(draw, data, y + 8)
-    y = draw_controls(draw, y + 14, count=f"Showing {len(data['rows'])} of {len(data['rows'])} rows")
-    top = data["rows"][0]
-    draw_table(draw, data["rows"][:12], 24, y + 12, W - 440, selected=top["slug"])
-    draw_detail(draw, top, W - 424, y + 12)
-    img.save(path, optimize=True)
-
-
-def shot_filtered(data, path):
-    # The category with the most board rows, as the page's filter would show it.
-    counts = {}
-    for r in data["rows"]:
-        if r["category"]:
-            counts[r["category"]] = counts.get(r["category"], 0) + 1
-    category = max(sorted(counts), key=lambda c: counts[c])
-    rows = [r for r in data["rows"] if r["category"] == category]
-    img, draw = base_canvas(data)
-    y = draw_header(draw, data)
-    y = draw_stats(draw, data, y + 8)
-    y = draw_controls(draw, y + 14, category=category, count=f"Showing {len(rows)} of {len(data['rows'])} rows")
-    draw_table(draw, rows, 24, y + 12, W - 24)
-    img.save(path, optimize=True)
+def shot_filtered(out_dir, snap_path):
+    board, snap, by_slug = load(out_dir, snap_path)
+    data = json.loads((Path(out_dir) / "data.js").read_text()[len("window.RADAR = "):-2])
+    # Filter to the most common category on the board.
+    from collections import Counter
+    cat = Counter(r["category"] for r in data["rows"] if r["category"]).most_common(1)[0][0]
+    subset = [r for r in data["rows"] if r["category"] == cat][:12]
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    header(d, "Token Launch Radar",
+           f"Snapshot {snap['as_of']}  ·  filtered view  ·  {len(subset)} of {len(data['rows'])} ranked protocols shown")
+    card(d, [48, 140, W - 48, 196])
+    d.text((66, 156), f"Filter:  Category = {cat}      Sort: Rank (implied value)",
+           font=font(16), fill=MUTED)
+    d.rounded_rectangle([48, 140, 52, 196], radius=2, fill=TEAL)
+    cols = [("#", 66, "l"), ("Protocol", 110, "l"), ("Category", 420, "l"),
+            ("Chains", 600, "l"), ("TVL", 1000, "r"), ("7d", 1150, "r"), ("Implied value", 1392, "r")]
+    disp = []
+    for r in subset:
+        p = by_slug[r["slug"]]
+        chg = p["change_7d"]
+        chg_txt = "—" if chg is None else f"{'+' if chg > 0 else ''}{chg:.1f}%"
+        disp.append([
+            (str(r["rank"]), TEXT, True, "l"),
+            (r["name"], TEXT, True, "l"),
+            (p["category"] or "—", MUTED, False, "l"),
+            (", ".join(p["chains"][:2]) + (" +" + str(len(p["chains"]) - 2) if len(p["chains"]) > 2 else ""), MUTED, False, "l"),
+            (money(p["tvl_usd"]), TEXT, False, "r"),
+            (chg_txt, GREEN if (chg or 0) >= 0 else RED, False, "r"),
+            (money(r["implied_value_usd"]), AMBER, True, "r"),
+        ])
+    table(d, disp, 216, cols)
+    d.text((48, 216 + 34 + len(subset) * 46 + 18),
+           f"Filtered to one category: {cat}. The same filter, search and sort controls work on the live dashboard.",
+           font=font(15), fill=MUTED)
+    footer(d, "Data: sealed DefiLlama snapshot. Implied values are this entry's own claim, never a prediction of a launch.")
+    return img
 
 
 def main():
-    out_dir = sys.argv[1] if len(sys.argv) > 1 else "out"
-    shots_dir = sys.argv[2] if len(sys.argv) > 2 else "screenshots"
-    board = json.load(open(os.path.join(out_dir, "board.json")))
-    data_js = open(os.path.join(out_dir, "data.js")).read()
-    data = json.loads(data_js[len("window.RADAR="):].rstrip().rstrip(";"))
-    assert len(board["rows"]) == len(data["rows"]), "board.json and data.js disagree"
-    os.makedirs(shots_dir, exist_ok=True)
-    shot_board(data, os.path.join(shots_dir, "1-board.png"))
-    shot_detail(data, os.path.join(shots_dir, "2-detail.png"))
-    shot_filtered(data, os.path.join(shots_dir, "3-filtered.png"))
-    for n in ("1-board.png", "2-detail.png", "3-filtered.png"):
-        p = os.path.join(shots_dir, n)
-        print(n, os.path.getsize(p), "bytes")
+    out_dir, snap_path = sys.argv[1], sys.argv[2]
+    shots = Path(out_dir) / "screenshots"
+    shots.mkdir(parents=True, exist_ok=True)
+    for name, fn in [("1-board.png", shot_board),
+                     ("2-detail.png", shot_detail),
+                     ("3-filtered.png", shot_filtered)]:
+        img = fn(out_dir, snap_path)
+        img.save(shots / name, format="PNG", optimize=True)
+        print(name, img.size, (shots / name).stat().st_size, "bytes")
 
 
 if __name__ == "__main__":
     main()
-
