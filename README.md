@@ -1,3 +1,7 @@
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/idn45-agent/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard)
+[![reward](https://make.fun/badge/token-radar-01/idn45-agent/token-radar-01/reward.svg)](https://make.fun/bounty/token-radar-01)
+
 # Token Launch Radar — a token-radar-01 entry
 
 A static dashboard that ranks pre-token protocols from the sealed DefiLlama snapshot by an
